@@ -143,6 +143,27 @@ cites D1 to D9 names the row it stands on.
 | E1 | The experiment fingerprint hashes the user CLAUDE.md, `~/.claude/settings.json`, `~/.claude.json`, and the `~/.claude/skills` tree, as a sorted per-file manifest of sha256 lines. Project-level CLAUDE.md files stay OUT of fingerprint scope. | The experiment is machine-level and the working directory can change between start and end, so hashing one project's CLAUDE.md would make the fingerprint depend on where the command was typed. The gap is recorded here rather than hidden: a project CLAUDE.md edit during an experiment window is a confounder the fingerprint will not catch. |
 | E2 | When `--treats` names a file inside fingerprint scope, the exclusion is recorded in the experiment record and printed at close, never applied silently. | The reviewer proved a treated `settings.json` blinds the guard to every other change in that file; visibility is the affordable fix, structural key-level hashing is deferred. |
 
+## F. MEASURED numbers on statistical power, snapshot 2026-08-23, one machine
+
+Window 2026-07-20 to 2026-08-22: 353 sessions, 61,798 API calls, 3,636 timed
+turns. Method and full working in `docs/STATISTICAL-POWER.md`. Proof for every
+row is the same as section B: the `usage` counters and message timestamps in
+local transcripts, read by arithmetic, no sampling and no model.
+
+| Row | Claim | Verdict | Evidence |
+|-----|-------|---------|----------|
+| F1 | `first_request_median`, the default experiment metric, has cv 0.179 across 353 sessions (mean 93,000, sd 16,626). | MEASURED | Per session first request read from every transcript in the window. |
+| F2 | At `MIN_SESSIONS = 3`, the smallest change the proof engine could reliably detect is 40.9%. 13 sessions per arm reaches 20%, 50 reaches 10%, 201 reaches 5%. | MEASURED variance, ESTIMATED projection | MDE = cv * sqrt(15.7 / n), applied to F1's cv. |
+| F3 | Dispersion spans three orders of magnitude by unit of analysis: per call cv 0.49 to 1.36, per session 0.179, per day 0.56 to 2.09. Days per arm to detect 20% ranges from 0.03 to 365. | MEASURED | Same window, three aggregation levels. |
+| F4 | Cross day correlations in this estate are confounded by volume. Fan out against rework falls from r 0.492 (p 0.004) to partial r 0.126 controlling for session count; session count against rework reverses sign to r -0.498 (p 0.026) once normalised per session. | MEASURED | Pearson r with 20,000 permutation p, standard three variable partial. |
+| F5 | Of 24.04B tokens of context read across 61,798 calls, the fixed preamble floor is 6.27B (26.1%) and within session accumulation is 17.76B (73.9%). | MEASURED | Direct decomposition, 143 sessions. |
+| F6 | Response latency rises 0.98 seconds per 100,000 tokens of context, t = 7.68, after removing the effect of reply length. | MEASURED | 3,636 turns, time from user message to first assistant token, ordinary least squares on the residual. |
+| F7 | Median session start context on this machine grew 748 tokens per day over 32 days, R squared 0.416, t = 4.62, from 78,773 to 101,315. | MEASURED | Daily median of per session first request, ordinary least squares. |
+
+Consequences applied to the build: none yet. F2 and F4 are recorded as open
+backlog entries D27 to D31 rather than silently fixed, because each needs a
+test calibrated by reinjection before it ships.
+
 ## The standing caveat on every measured number
 
 Every MEASURED figure here was taken on one machine's transcripts. They are

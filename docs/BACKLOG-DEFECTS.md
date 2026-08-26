@@ -211,6 +211,36 @@ The fleet dashboard keys latest-wins on (label, confidence), but the page copy r
 
 ---
 
+## OPEN, from the power analysis of 2026-08-23
+
+Found by measuring this project's own proof engine against the variance of the
+data it judges. Full working, formulas and reproduction in
+`docs/STATISTICAL-POWER.md`; the numbers are also registered as claims F1 to F7
+in `docs/CLAIMS.md`. Nothing here was found by a reviewer arguing; each entry
+carries the figure that produced it.
+
+| # | Severity | What | Reproduction |
+|---|---|---|---|
+| D27 | Critical | VERIFIED is awarded without ever comparing the delta to noise. `build_record` in `scripts/experiment.py` decides the confidence label from guard conditions alone (schema, window, session floor, parse skips, fingerprint), then reads `direction` off the sign of `metric_delta`. A 1% drift and a 60% saving reach the same label. The project already records this exact shape twice in its own history: a control that cannot reach a verdict reads as a passing control. | Read the body of `build_record`, line 427 onward in `scripts/experiment.py`: no term in the verdict references the dispersion of either cohort. Measured cv of the default metric is 0.179 (claim F1). |
+| D28 | Major | The session floor is a constant 3, which admits a minimum detectable effect of 40.9%. Any real saving below that size can be printed as VERIFIED or missed entirely, and the user is told neither. | `MIN_SESSIONS = 3` at line 67. MDE = 0.179 * sqrt(15.7 / 3) = 0.409 (claim F2). |
+| D29 | Major | Total metrics (`output_total`, `input_total`, `normalized_input_total`, `subagent_output_total`, the write totals) move with how many sessions fall in a cohort, independently of the treatment. Session count on this machine has cv 0.71 day to day, so two equal length windows can differ substantially in volume and the total will report a saving or a regression that is pure arithmetic. Reasoned from the metric definitions and the measured volume variance, not yet demonstrated with a paired run. | Metric list at `METRIC_DIRECTIONS`, line 85. Session count dispersion from the 2026-08-23 window (claim F3). |
+| D30 | Major | The startup rent linter measures 26.1% of the problem. Of 24.04B tokens of context read across 61,798 calls, the fixed preamble floor is 6.27B and within session accumulation is 17.76B. `context_lint.py` covers only the first term; nothing in the toolkit measures or advises on session length, which on these numbers is the larger lever (48.1% against 14.5%). | Direct decomposition over 143 sessions (claim F5). Across the 108 sessions of 30 calls or more in the window, median session length is 434 calls, p90 is 995, and context grows about 725 tokens per call. |
+| D31 | Minor | Startup rent is reported as a level with no trend, while it carries a positive drift of 748 tokens per day (R squared 0.416, t = 4.62) on this machine. A single current reading hides the fact that a pruning round is undone by drift within weeks. | Ordinary least squares over 32 days of daily medians, 353 sessions (claim F7). |
+
+### The capability these findings point at, recorded so it is not lost
+
+Response latency rises 0.98 seconds per 100,000 tokens of context (t = 7.68,
+3,636 timed turns, claim F6). `profile.py` already walks message timestamps and
+computes gaps between consecutive messages, but buckets every gap as idle time.
+Splitting the user to assistant gap from the assistant to user gap turns data
+the tool already parses into a seconds figure beside the token figure. Not a
+defect, and not scheduled: recorded here because the parsing work is already
+done and the conversion coefficient is now measured. Any such feature must
+label the number as response latency as experienced, since a transcript gap
+includes network time and queueing, not model time alone.
+
+---
+
 ## OPEN, found earlier
 
 ### D8. A legacy baseline can never be closed, so it looks open forever
