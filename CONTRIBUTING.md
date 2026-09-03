@@ -5,18 +5,16 @@ change that fits should be a small diff.
 
 ## Running the tests
 
-The test suite is plain Python, stdlib only, no framework. From the
-`scripts` directory:
+The test suite is plain Python, stdlib only, no framework. Each test
+runs as `python3 <file>` from the `scripts` directory.
 
-```
-python3 test_measure_tokens.py
-python3 test_tools.py
-python3 test_pricing.py
-python3 test_experiment.py
-```
-
-All four must pass before a change is proposed. CI runs the same four
-commands on every push and pull request.
+The authoritative list of tests is the `Run tests` step in
+`.github/workflows/ci.yml`. Copy that command, run it from `scripts`,
+and make sure the whole suite passes before proposing a change; CI runs
+the same command. The list is kept only in the workflow so it cannot
+drift out of sync with a copy here. CI also runs a Python 3.11 syntax
+check, the bench self-check and benchmark, and the MCP server tests, all
+defined in the same file.
 
 ## Invariants a pull request must keep
 
