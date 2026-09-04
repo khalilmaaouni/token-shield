@@ -452,7 +452,13 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         ties broken lexically) differs between the before and after cohort,
         when both sides carry main-thread model tracking at all; exactly one
         side missing it (a baseline pinned before this field existed) is
-        itself a downgrade, never a silent skip, since NO DATA beats a guess.
+        itself a downgrade, never a silent skip, since NO DATA beats a guess;
+      - the spread (first_request_p90 minus the median) widened by at least
+        as much as the median improved, so the move sits inside the noise of
+        the after cohort rather than above it. Judged only for the default
+        (median) metric, since the spread is defined against that median;
+        exactly one side carrying a p90 is itself a downgrade, and both
+        sides missing it stays silent, on the model mix guard's reasoning.
     Non-overlap between the before and after cohort windows is a harder
     refusal, enforced by check_cohort_order before this function is ever
     called, so no ledger record gets written for it at all.
@@ -570,7 +576,6 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         # than raising.
         reasons.append(f"metric not comparable (non-numeric): '{metric}'")
 
-    verified = not reasons
     metric_delta = None
     if _is_numeric(metric_before) and _is_numeric(metric_after):
         # Raw delta, always before minus after (positive = the number went
@@ -607,6 +612,36 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
 
     p90_before = b.get("first_request_p90")
     p90_after = after_sm.get("first_request_p90")
+
+    # A median that improved by less than the spread around it widened is not
+    # evidence: the same cohort resampled would have produced that move. The
+    # spread is p90 minus the median, so it only describes the default
+    # (median) metric, and it fires only where the spread actually widened,
+    # so a flat or tightening after cohort is judged exactly as it was
+    # before. Exactly one side carrying a p90 is a downgrade by name, the
+    # same as the model mix guard above: a silent skip there would let a
+    # baseline pinned before p90 existed reach VERIFIED with this guard
+    # never having run.
+    if metric == DEFAULT_METRIC:
+        if p90_before is None and p90_after is None:
+            pass
+        elif (p90_before is None) != (p90_after is None):
+            thin_side = "before" if p90_before is None else "after"
+            reasons.append(
+                f"dispersion cannot be compared: the {thin_side} cohort has "
+                f"no first_request_p90 recorded")
+        elif (metric_delta is not None
+                and _is_numeric(p90_before) and _is_numeric(p90_after)):
+            spread_before = p90_before - metric_before
+            spread_after = p90_after - metric_after
+            widening = spread_after - spread_before
+            if widening > 0 and improvement <= widening:
+                reasons.append(
+                    f"the median improved by {improvement} but the spread "
+                    f"(p90 minus median) widened by {widening}: the change is "
+                    f"inside the noise of the after cohort")
+
+    verified = not reasons
 
     return {
         "schema": EXP_SCHEMA,
