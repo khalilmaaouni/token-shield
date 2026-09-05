@@ -287,11 +287,13 @@ Aggregates only, no session identifiers, no paths. Open the HTML locally, or
 publish it as a private artifact. This is your dashboard of your own numbers; the
 repo ships the generator, never anyone's data.
 
-Both test files run without a framework:
+These run without a framework:
 
 ```bash
 python3 scripts/test_measure_tokens.py && python3 scripts/test_tools.py
 ```
+
+That pair is a quick check, not the whole suite. The full set (the twenty-four test files in `scripts/`, plus the `bench` and `mcp-server` suites) runs in CI on every push; see `CONTRIBUTING.md` for the list.
 
 ## The method, in full
 
