@@ -1310,6 +1310,98 @@ def test_a_non_numeric_floor_refuses_instead_of_crashing():
           rec["floor_reduction_tokens"] is None)
 
 
+def test_dispersion_guard_catches_widened_spread():
+    """PR 101, Critical 1 / the guard's own stated case. A 1 percent move
+    (100000 -> 99000) with the after cohort's spread (p90 minus median)
+    wider than the before cohort's must downgrade: the move sits inside the
+    after cohort's own noise."""
+    b = _baseline(fr=100000)
+    b["summary"]["first_request_p90"] = 101000  # spread_before = 1000
+    a = _after(fr=99000)
+    a["first_request_p90"] = 109000  # spread_after = 10000
+
+    rec = ex.build_record(b, a, "2026-09-05T00:00:00")
+    check("a move smaller than the noisier spread is not proven",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason names the noise",
+          any("inside the noise" in r for r in rec["reasons"]))
+
+
+def test_dispersion_guard_catches_identical_spread():
+    """PR 101, Critical 1. The maintainer's reproduction: the same 1 percent
+    move with the before and after spreads IDENTICAL (5000 vs 5000, so
+    nothing widened) reached VERIFIED under the first cut of this guard,
+    because that cut only compared the move to the CHANGE in spread. The
+    move (1000) is still smaller than the noise itself (5000), so it must
+    downgrade regardless of whether the spread moved at all."""
+    b = _baseline(fr=100000)
+    b["summary"]["first_request_p90"] = 105000  # spread_before = 5000
+    a = _after(fr=99000)
+    a["first_request_p90"] = 104000  # spread_after = 5000, identical
+
+    rec = ex.build_record(b, a, "2026-09-05T00:00:00")
+    check("an identical spread does not exempt a move smaller than it",
+          rec["confidence"] == "NOT_PROVEN")
+
+
+def test_dispersion_guard_catches_tightened_spread():
+    """PR 101, Critical 1. The maintainer's reproduction: the same 1 percent
+    move with the spread TIGHTENED (10000 before, 2500 after) also reached
+    VERIFIED under the widening-only cut, since nothing widened. The move
+    (1000) is still no larger than the noisier side (10000, the before
+    cohort), so it must downgrade."""
+    b = _baseline(fr=100000)
+    b["summary"]["first_request_p90"] = 110000  # spread_before = 10000
+    a = _after(fr=99000)
+    a["first_request_p90"] = 101500  # spread_after = 2500, tighter
+
+    rec = ex.build_record(b, a, "2026-09-05T00:00:00")
+    check("a tightened spread does not exempt a move smaller than the "
+          "noisier side",
+          rec["confidence"] == "NOT_PROVEN")
+
+
+def test_dispersion_guard_names_thin_sample_instead_of_silent_pass():
+    """PR 101, Critical 2. scripts/measure_tokens.py only computes a p90 at
+    10 or more first-request sessions; MIN_SESSIONS above is 3, so a modern
+    cohort of 3 to 9 sessions reports first_request_n below 10 with
+    first_request_p90 None on BOTH sides, exactly the same as a legacy
+    baseline that never tracked p90 at all. The guard used to read both of
+    those as one case and pass silently. A modern cohort this thin must be
+    named, not treated as untracked."""
+    b = _baseline(fr=100000, sessions=5)
+    b["summary"]["first_request_n"] = 5
+    a = _after(fr=90000, sessions=6)
+    a["first_request_n"] = 6
+
+    rec = ex.build_record(b, a, "2026-09-05T00:00:00")
+    check("a thin modern cohort is not silently passed",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason names the session counts",
+          any("before=5" in r and "after=6" in r for r in rec["reasons"]))
+
+
+def test_dispersion_guard_wording_matches_direction_on_regression():
+    """PR 101, Major 5. On a genuine regression the guard used to print "the
+    median improved by -8000" (the sign never flipped for the regression
+    case) while the record's own direction field said regression. The
+    wording must track direction: "worsened", not a negative "improved"."""
+    b = _baseline(fr=60000)
+    b["summary"]["first_request_p90"] = 65000  # spread_before = 5000
+    a = _after(fr=68000)
+    a["first_request_p90"] = 90000  # spread_after = 22000
+
+    rec = ex.build_record(b, a, "2026-09-05T00:00:00")
+    check("direction still reads as a regression",
+          rec["direction"] == "regression")
+    check("a regression inside the noise is also downgraded",
+          rec["confidence"] == "NOT_PROVEN")
+    check("the reason says worsened, by the positive magnitude",
+          any("worsened by 8000" in r for r in rec["reasons"]))
+    check("the reason never prints a negative 'improved by'",
+          not any("improved by -8000" in r for r in rec["reasons"]))
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):

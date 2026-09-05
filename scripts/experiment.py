@@ -452,7 +452,16 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         ties broken lexically) differs between the before and after cohort,
         when both sides carry main-thread model tracking at all; exactly one
         side missing it (a baseline pinned before this field existed) is
-        itself a downgrade, never a silent skip, since NO DATA beats a guess.
+        itself a downgrade, never a silent skip, since NO DATA beats a guess;
+      - the move (by magnitude, whichever direction) is no larger than the
+        noisier of the two cohorts' spreads (first_request_p90 minus the
+        median), so the move sits inside noise the data already shows rather
+        than above it. Judged only for the default (median) metric, since
+        the spread is defined against that median; exactly one side
+        carrying a p90 is itself a downgrade, both sides missing it stays
+        silent UNLESS a modern summary reports fewer than 10 first-request
+        sessions on either side, which is named as its own downgrade rather
+        than read as "no dispersion tracking".
     Non-overlap between the before and after cohort windows is a harder
     refusal, enforced by check_cohort_order before this function is ever
     called, so no ledger record gets written for it at all.
@@ -570,7 +579,6 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
         # than raising.
         reasons.append(f"metric not comparable (non-numeric): '{metric}'")
 
-    verified = not reasons
     metric_delta = None
     if _is_numeric(metric_before) and _is_numeric(metric_after):
         # Raw delta, always before minus after (positive = the number went
@@ -607,6 +615,62 @@ def build_record(baseline, after_sm, ended_iso, fingerprint_end=None):
 
     p90_before = b.get("first_request_p90")
     p90_after = after_sm.get("first_request_p90")
+
+    # D27 follow-up. A move no larger than the noise already present in
+    # EITHER cohort is not evidence: the same cohort resampled could have
+    # produced it. The spread is p90 minus the median, so it only describes
+    # the default (median) metric. The first cut of this guard compared the
+    # move only to the WIDENING of the spread (spread_after - spread_before),
+    # which left a move smaller than an identical or even a tightened spread
+    # reaching VERIFIED untouched, on main and here alike, because nothing
+    # widened. The noise a move has to clear is the larger of the two
+    # cohorts' spreads, not the change between them, so the comparison is
+    # against max(spread_before, spread_after) instead. A spread of exactly
+    # zero on both sides (no measured dispersion at all) still verifies:
+    # there is no noise band for the move to hide inside. The move is
+    # compared by magnitude (abs), because a regression is exactly as
+    # explainable by noise as a saving is; direction below still says which
+    # one it was. Exactly one side carrying a p90 is a downgrade by name, the
+    # same as the model mix guard above: a silent skip there would let a
+    # baseline pinned before p90 existed reach VERIFIED with this guard
+    # never having run. Both sides carrying no p90 is not automatically
+    # silent either: measure_tokens.py only computes a p90 at 10 or more
+    # first-request sessions (scripts/measure_tokens.py:622), while
+    # MIN_SESSIONS above is 3, so a cohort of 3 to 9 sessions reports a
+    # first_request_n below 10 with first_request_p90 None on a modern
+    # summary, not a legacy one missing the field outright. That thin-sample
+    # case is named explicitly rather than read as "no dispersion tracking"
+    # and passed through silently.
+    if metric == DEFAULT_METRIC:
+        if p90_before is None and p90_after is None:
+            n_before = b.get("first_request_n")
+            n_after = after_sm.get("first_request_n")
+            thin = [n for n in (n_before, n_after) if n is not None and n < 10]
+            if thin:
+                reasons.append(
+                    "dispersion cannot be measured: fewer than 10 "
+                    "first-request sessions on at least one side "
+                    f"(before={n_before}, after={n_after}), need 10 for a p90")
+        elif (p90_before is None) != (p90_after is None):
+            thin_side = "before" if p90_before is None else "after"
+            reasons.append(
+                f"dispersion cannot be compared: the {thin_side} cohort has "
+                f"no first_request_p90 recorded")
+        elif (metric_delta is not None
+                and _is_numeric(p90_before) and _is_numeric(p90_after)):
+            spread_before = p90_before - metric_before
+            spread_after = p90_after - metric_after
+            noise = max(spread_before, spread_after)
+            move = abs(improvement)
+            if noise > 0 and move <= noise:
+                move_word = "worsened" if direction == "regression" else "improved"
+                reasons.append(
+                    f"the median {move_word} by {move} but the spread (p90 "
+                    f"minus median) is {noise} on the noisier side (before "
+                    f"{spread_before}, after {spread_after}): the change is "
+                    f"inside the noise of the cohorts")
+
+    verified = not reasons
 
     return {
         "schema": EXP_SCHEMA,
