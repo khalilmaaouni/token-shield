@@ -1310,6 +1310,133 @@ def test_a_non_numeric_floor_refuses_instead_of_crashing():
           rec["floor_reduction_tokens"] is None)
 
 
+# --- Phase 0 (learning loop): 6 fixed task-class fixtures wired through the
+# existing cohort/fingerprint infrastructure, one smoke pass each ------------
+
+def _fixture_line(ts, inp, out=5, model="claude-x", sub=False, read=1000):
+    """A minimal usage-line record, the same shape _usage_line already
+    produces, but with model/read exposed so a fixture can represent an
+    outside-model-lane call or a read-heavy investigation call."""
+    return json.dumps({"timestamp": ts, "isSidechain": sub,
+                       "message": {"model": model, "usage": {
+                           "input_tokens": inp, "cache_read_input_tokens": read,
+                           "output_tokens": out,
+                           "cache_creation": {"ephemeral_5m_input_tokens": 10,
+                                              "ephemeral_1h_input_tokens": 0}}}}) + "\n"
+
+
+# One fixture per task class named in the roadmap: a short, deterministic
+# transcript plus the call count collect_cohort should report back. Content
+# and exact token counts are otherwise arbitrary; what matters is that each
+# shape (a single small call, a chatty many-call session, a distinct model
+# name for the outside-model lane) runs through unchanged.
+TASK_CLASS_FIXTURES = [
+    ("small_lookup_read", [_fixture_line("2026-08-10T00:00:00+00:00", 500, out=20)]),
+    ("mechanical_one_file_edit", [
+        _fixture_line("2026-08-10T00:00:00+00:00", 2000, out=100),
+        _fixture_line("2026-08-10T00:01:00+00:00", 2200, out=300),
+    ]),
+    ("multi_file_implementation", [
+        _fixture_line(f"2026-08-10T00:0{i}:00+00:00", 3000 + i * 500, out=800)
+        for i in range(6)
+    ]),
+    ("repo_wide_readonly_investigation", [
+        _fixture_line(f"2026-08-10T00:0{i}:00+00:00", 1000, out=50, read=40000)
+        for i in range(8)
+    ]),
+    ("outside_model_lane_or_ask", [
+        _fixture_line("2026-08-10T00:00:00+00:00", 1500, out=200,
+                      model="openrouter/deepseek-v4.1-flash"),
+    ]),
+    ("long_tool_heavy_context_pressure", [
+        _fixture_line(f"2026-08-10T00:{i:02d}:00+00:00", 4000, out=1500, read=20000)
+        for i in range(30)
+    ]),
+]
+
+
+def test_six_task_class_fixtures_smoke_through_cohort_and_fingerprint():
+    # Reuses collect_cohort and compute_fingerprint exactly as the rest of
+    # this file already exercises them (no parallel cohort/fingerprint path
+    # invented for the fixtures): each fixture is written as one session
+    # transcript, walked by collect_cohort, and compute_fingerprint is run
+    # once alongside it so the whole existing pipeline is proven live for
+    # every task class, not just the ones the other tests happen to cover.
+    for name, lines in TASK_CLASS_FIXTURES:
+        with tempfile.TemporaryDirectory() as td:
+            sessions_dir = os.path.join(td, "sessions")
+            os.makedirs(sessions_dir)
+            saved = _point_paths_at(os.path.join(td, "config"))
+            try:
+                _write(ex.CLAUDE_MD_PATH, "md")
+                _write(ex.SETTINGS_PATH, "{}")
+                _write(ex.CLAUDE_JSON_PATH, "{}")
+                fp = os.path.join(sessions_dir, "session.jsonl")
+                with open(fp, "w") as f:
+                    f.writelines(lines)
+
+                start_ts = ex._parse_ts("2026-08-01T00:00:00+00:00")
+                end_ts = ex._parse_ts("2026-08-20T00:00:00+00:00")
+                cohort = ex.collect_cohort(sessions_dir, start_ts, end_ts)
+                check(f"{name}: the fixture session lands in the cohort",
+                      len(cohort) == 1)
+                check(f"{name}: every fixture call is counted",
+                      cohort[0]["calls"] == len(lines))
+
+                fingerprint = ex.compute_fingerprint()
+                check(f"{name}: the fingerprint pipeline runs and returns a "
+                      "real sha256 hex digest",
+                      isinstance(fingerprint, str) and len(fingerprint) == 64)
+            finally:
+                _restore_paths(saved)
+
+
+# --- public-content boundary: outside-model prompts must be public-safe -----
+
+def test_public_safety_check_passes_a_generalized_prompt():
+    prompt = ("Summarize common prompt-caching strategies for reducing LLM "
+              "API token usage across repeated calls.")
+    check("a generalized, public-safe prompt has no violations",
+          ex.public_safety_violations(prompt) == [])
+    check("is_public_safe agrees", ex.is_public_safe(prompt) is True)
+
+
+def test_public_safety_check_flags_a_private_looking_path():
+    prompt = "Please review /Users/khalil.maaouni/SaveClaudeTokens/scripts/experiment.py"
+    violations = ex.public_safety_violations(prompt)
+    check("a private-looking path is flagged", violations != [])
+    check("the reason names it as a filesystem path",
+          any("private filesystem path" in r for r in violations))
+    check("is_public_safe agrees", ex.is_public_safe(prompt) is False)
+
+    home_relative = "look under ~/Documents/some-project for the config"
+    check("a ~/ reference is flagged too",
+          ex.public_safety_violations(home_relative) != [])
+
+
+def test_public_safety_check_flags_a_repo_reference():
+    prompt = "clone git@github.com:someorg/some-private-repo.git and read main.py"
+    violations = ex.public_safety_violations(prompt)
+    check("a repo clone reference is flagged", violations != [])
+    check("the reason names it as a repo reference",
+          any("repo reference" in r for r in violations))
+
+
+def test_public_safety_check_flags_a_named_extra_term():
+    prompt = "the client codenamed PROJECTX needs this summarized"
+    check("no violation without the term declared",
+          ex.public_safety_violations(prompt) == [])
+    check("the term is flagged once declared as extra_terms",
+          ex.public_safety_violations(prompt, extra_terms=["PROJECTX"]) != [])
+
+
+def test_public_safety_check_handles_bad_input_without_raising():
+    check("None is treated as no violations, not a crash",
+          ex.public_safety_violations(None) == [])
+    check("an empty string is treated as no violations",
+          ex.public_safety_violations("") == [])
+
+
 if __name__ == "__main__":
     n = 0
     for name in sorted(dir(sys.modules[__name__])):

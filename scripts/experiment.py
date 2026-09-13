@@ -49,6 +49,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -940,6 +941,67 @@ def cmd_report():
               f"{row['verified']:>2} VERIFIED  {row['not_proven']:>2} NOT_PROVEN  "
               f"latest VERIFIED floor reduction {floor}")
     return 0
+
+
+# --- public-content boundary: what an outside model (DeepSeek/Muse via
+# OpenRouter) is allowed to see ------------------------------------------
+#
+# Standing rule for this project: an outside-model call only ever receives
+# generalized, public-safe content, never a private filesystem path, a repo
+# reference, or a named client/project code. This is a deterministic
+# grep-style gate, not an LLM call: it cannot judge meaning, only flag the
+# same shapes a human reviewer would catch by eye before pasting a prompt
+# into a browser tab. A prompt this misses still needs a human's read; a
+# prompt this flags is refused before it ever leaves the machine.
+
+# A private filesystem path: a /Users/<name> or /home/<name> home directory,
+# a bare ~/ reference, or a Windows C:\Users\<name> path. `[^/\s"']+` stops
+# at the next path separator or quote so the match names the offending
+# segment rather than swallowing the rest of the line.
+_PRIVATE_PATH_RE = re.compile(
+    r"(?:/Users/[^/\s\"']+|/home/[^/\s\"']+|~[/\\]|[A-Za-z]:\\Users\\[^\\\"']+)")
+
+# A repo reference: an SSH or HTTPS clone URL, or a bare ".git" path segment.
+# Naming a repo (even a public one's URL) is out of scope for a generalized
+# prompt: the rule is "public-safe content", not "already-public content".
+_REPO_REF_RE = re.compile(
+    r"(?:git@[\w.\-]+:[\w./\-]+\.git"
+    r"|https?://(?:www\.)?(?:github|gitlab|bitbucket)\.(?:com|org)/[\w.\-]+/[\w.\-]+"
+    r"|\S*\.git\b)")
+
+
+def public_safety_violations(prompt, extra_terms=None):
+    """Every reason `prompt` is not safe to hand an outside model, or []
+    when it looks clean. Never raises on bad input: a non-string or empty
+    prompt reads as no violations found, since there is nothing in it to
+    flag (the caller's own emptiness check, if any, is a separate concern).
+
+    `extra_terms` is an optional list of caller-named private strings
+    (a client code, a team member's name) to flag as a case-insensitive
+    substring match; this function ships with no such terms baked in, since
+    hardcoding one deployment's private vocabulary into a shared checker
+    would itself be private content shipped in public source.
+    """
+    if not isinstance(prompt, str) or not prompt:
+        return []
+    reasons = []
+    path_hits = sorted(set(_PRIVATE_PATH_RE.findall(prompt)))
+    if path_hits:
+        reasons.append(f"looks like a private filesystem path: {', '.join(path_hits)}")
+    repo_hits = sorted(set(_REPO_REF_RE.findall(prompt)))
+    if repo_hits:
+        reasons.append(f"looks like a repo reference: {', '.join(repo_hits)}")
+    for term in (extra_terms or []):
+        if term and term.lower() in prompt.lower():
+            reasons.append(f"contains a named private term: '{term}'")
+    return reasons
+
+
+def is_public_safe(prompt, extra_terms=None):
+    """True when `prompt` carries none of the flagged shapes. Convenience
+    wrapper around public_safety_violations for a caller that only needs
+    the yes/no, not the reasons."""
+    return not public_safety_violations(prompt, extra_terms)
 
 
 def main():

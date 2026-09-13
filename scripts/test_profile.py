@@ -261,6 +261,44 @@ def test_pressure_tool_output_share_by_tool():
     assert abs(share["value"]["Bash"] - 50 / expected_total) < 1e-9, share
 
 
+def test_behavior_sessions_reports_parent_sessions_not_transcript_total():
+    # behavior.sessions is the headline session count shown to the founder.
+    # A subagent transcript (every usage-bearing record isSidechain=True, so
+    # read_session never sets "first") is real token volume but not a
+    # session of its own; the headline must count real top-level sessions
+    # only, never the parent-plus-subagent transcript total.
+    with tempfile.TemporaryDirectory() as d:
+        _write(os.path.join(d, "parent.jsonl"), [
+            _rec("2026-08-12T10:00:00Z", sidechain=False),
+        ])
+        _write(os.path.join(d, "subagent.jsonl"), [
+            _rec("2026-08-12T10:00:05Z", sidechain=True),
+        ])
+        sessions = mt.collect(d, 30)
+        sm = mt.summarize(sessions)
+        prof = pf.build_profile(root=d, days=30)
+
+    # Nothing removed from measure_tokens.summarize()'s contract: all three
+    # counts are still there, only profile.py's headline pick changed.
+    assert sm["sessions"] == 2, sm
+    assert sm["parent_sessions"] == 1, sm
+    assert sm["subagent_transcripts"] == 1, sm
+
+    headline = prof["behavior"]["sessions"]
+    assert headline["label"] == "MEASURED", headline
+    assert headline["value"] == 1, headline
+    assert headline["value"] == sm["parent_sessions"], headline
+    assert headline["value"] != sm["sessions"], (
+        "headline must not fall back to reporting the raw transcript total", headline)
+
+    # subagent_transcript_share still reads the raw transcript total as its
+    # denominator (subagent_transcripts / sessions), unaffected by the
+    # headline relabel.
+    share = prof["behavior"]["subagent_transcript_share"]
+    assert share["label"] == "MEASURED", share
+    assert abs(share["value"] - 0.5) < 1e-9, share
+
+
 def test_pressure_tool_output_share_no_data_without_tool_results():
     with tempfile.TemporaryDirectory() as d:
         _write(os.path.join(d, "s.jsonl"), [

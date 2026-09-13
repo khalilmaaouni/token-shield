@@ -395,7 +395,7 @@ def build_profile(root=None, days=30):
     cutoff = time.time() - days * 86400
     effort_values, gaps, files_scanned, raw_skip_files, raw_skip_lines = _raw_scan(root, cutoff)
 
-    n_sessions = sm.get("sessions")
+    n_sessions = sm.get("parent_sessions")
     window_note = f"measure_tokens.summarize() over the {days:g}-day window"
 
     def usage_metric(key):
@@ -418,8 +418,11 @@ def build_profile(root=None, days=30):
     sub_share = (sm["subagent_transcripts"] / sm["sessions"]) if sm.get("sessions") else None
 
     behavior = {
-        "sessions": (metric(n_sessions, "MEASURED", f"parent-plus-subagent transcript count from {window_note}")
-                     if n_sessions else no_data("no session transcripts found in window")),
+        "sessions": (metric(n_sessions, "MEASURED",
+                            f"parent_sessions (real top-level session count) from "
+                            f"{window_note}; subagent transcripts are tracked "
+                            f"separately, see subagent_transcript_share")
+                     if n_sessions else no_data("no parent sessions found in window")),
         "model_switch_session_share": (
             no_data("no parent sessions in window") if switch_share is None else
             metric(switch_share, "MEASURED",
